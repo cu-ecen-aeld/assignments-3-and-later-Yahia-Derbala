@@ -11,7 +11,7 @@ WRITEDIR=/tmp/aeld-data
 username=$(cat conf/username.txt)
 
 # Clean any previous build artifacts
-make clean
+#make clean
 
 # Compile your writer application using native compilation
 #make
@@ -23,7 +23,7 @@ echo "Writing ${NUMFILES} files containing string ${WRITESTR} to ${WRITEDIR}"
 rm -rf "${WRITEDIR}"
 
 # Create $WRITEDIR if not assignment1
-assignment=$(cat ../conf/assignment.txt)
+assignment=$(cat conf/assignment.txt)
 
 if [ "$assignment" != 'assignment1' ]; then
     mkdir -p "$WRITEDIR"
