@@ -1,5 +1,11 @@
 #include "systemcalls.h"
-
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <stdarg.h>
 /**
  * @param cmd the command to execute with system()
  * @return true if the command in @param cmd was executed
@@ -16,8 +22,13 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+    int exit_status = system(cmd);  // Execute the system command and get its exit status
 
-    return true;
+    if (exit_status == 0) {
+        return true;  // The command completed successfully
+    } else {
+        return false; // The command returned an error
+    }
 }
 
 /**
@@ -69,31 +80,42 @@ bool do_exec(int count, ...)
 *   This file will be closed at completion of the function call.
 * All other parameters, see do_exec above
 */
-bool do_exec_redirect(const char *outputfile, int count, ...)
+bool do_exec(int count, ...)
 {
     va_list args;
     va_start(args, count);
-    char * command[count+1];
+    
+    char *command[count + 1];
     int i;
-    for(i=0; i<count; i++)
-    {
+    for(i = 0; i < count; i++) {
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
-
-/*
- * TODO
- *   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a refernce,
- *   redirect standard out to a file specified by outputfile.
- *   The rest of the behaviour is same as do_exec()
- *
-*/
-
+    
     va_end(args);
 
-    return true;
+    pid_t child_pid = fork();
+
+    if (child_pid == -1) {
+        // Forking failed
+        return false;
+    }
+
+    if (child_pid == 0) {
+        // This code is executed by the child process
+        execv(command[0], command);
+        // If execv returns, it indicates an error
+        exit(1);
+    } else {
+        // This code is executed by the parent process
+
+        int status;
+        waitpid(child_pid, &status, 0);
+
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+            return true;  // Command executed successfully
+        } else {
+            return false;  // Command failed
+        }
+    }
 }

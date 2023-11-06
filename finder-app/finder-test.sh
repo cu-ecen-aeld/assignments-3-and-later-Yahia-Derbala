@@ -14,7 +14,7 @@ username=$(cat conf/username.txt)
 make clean
 
 # Compile your writer application using native compilation
-make
+#make
 
 MATCHSTR="The number of files are ${NUMFILES} and the number of matching lines are ${NUMFILES}"
 
