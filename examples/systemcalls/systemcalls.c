@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <stdarg.h>
+#include <fcntl.h>
 /**
  * @param cmd the command to execute with system()
  * @return true if the command in @param cmd was executed
@@ -22,13 +23,14 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-    int exit_status = system(cmd);  // Execute the system command and get its exit status
+int exit_status = system(cmd);  // Execute the system command and get its exit status
 
     if (exit_status == 0) {
         return true;  // The command completed successfully
     } else {
         return false; // The command returned an error
     }
+    return true;
 }
 
 /**
@@ -45,41 +47,6 @@ bool do_system(const char *cmd)
 *   by the command issued in @param arguments with the specified arguments.
 */
 
-bool do_exec(int count, ...)
-{
-    va_list args;
-    va_start(args, count);
-    char * command[count+1];
-    int i;
-    for(i=0; i<count; i++)
-    {
-        command[i] = va_arg(args, char *);
-    }
-    command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
-/*
- * TODO:
- *   Execute a system command by calling fork, execv(),
- *   and wait instead of system (see LSP page 161).
- *   Use the command[0] as the full path to the command to execute
- *   (first argument to execv), and use the remaining arguments
- *   as second argument to the execv() command.
- *
-*/
-
-    va_end(args);
-
-    return true;
-}
-
-/**
-* @param outputfile - The full path to the file to write with command output.
-*   This file will be closed at completion of the function call.
-* All other parameters, see do_exec above
-*/
 bool do_exec(int count, ...)
 {
     va_list args;
@@ -117,5 +84,58 @@ bool do_exec(int count, ...)
         } else {
             return false;  // Command failed
         }
+    }
+}
+
+/**
+* @param outputfile - The full path to the file to write with command output.
+*   This file will be closed at completion of the function call.
+* All other parameters, see do_exec above
+*/
+
+bool do_exec_redirect(const char *outputfile, int count, ...)
+{
+    va_list args;
+    va_start(args, count);
+
+    char *command[count + 1];
+    int i;
+    for (i = 0; i < count; i++) {
+        command[i] = va_arg(args, char *);
+    }
+    command[count] = NULL;
+
+    va_end(args);
+
+    // Open the output file for writing
+    int fd = open(outputfile, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+    if (fd < 0) {
+        perror("open");
+        return false;
+    }
+
+    pid_t kidpid;
+    switch (kidpid = fork()) {
+        case -1:
+            perror("fork");
+            return false;
+        case 0:
+            // Child process
+            if (dup2(fd, 1) < 0) {
+                perror("dup2");
+                abort();
+            }
+            close(fd);
+            execvp(command[0], command);
+            perror("execvp");
+            abort();
+        default:
+            close(fd);
+            int status;
+            if (waitpid(kidpid, &status, 0) == -1) {
+                perror("waitpid");
+                return false;
+            }
+            return WIFEXITED(status) && WEXITSTATUS(status) == 0;
     }
 }
