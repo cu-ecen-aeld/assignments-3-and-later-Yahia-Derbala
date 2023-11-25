@@ -34,6 +34,11 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
   echo "Checking out version ${KERNEL_VERSION}"
   git checkout ${KERNEL_VERSION}
 
+wget -O gcc-arm.tar.xz https://developer.arm.com/-/media/Files/downloads/gnu-a/10.2-2020.11/binrel/gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu.tar.xz
+    mkdir ${OUTDIR}/install
+    tar x -C ${OUTDIR}/install -f gcc-arm.tar.xz
+    rm -r gcc-arm.tar.xz
+    export PATH=${PATH}:${OUTDIR}/install/gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu/bin
   # Configure the kernel
   make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} defconfig
 
@@ -85,7 +90,7 @@ echo "Library dependencies"
 ${CROSS_COMPILE}readelf -a bin/busybox | grep "program interpreter"
 ${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library"
 
-SYSROOT=/home/yahia/Desktop/Toolchain/arm-gnu-toolchain-13.2.Rel1-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc
+SYSROOT=${OUTDIR}/install/gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc
 # TODO: Add library dependencies to rootfs
 cp -L $SYSROOT/lib64/libm.so.* lib64
 cp -L $SYSROOT/lib64/libresolv.so.* lib64
