@@ -1,7 +1,7 @@
 #!/bin/sh
 
 SERVICE_NAME=aesdsocket
-SERVICE_PATH=/usr/bin/aesdsocket
+SERVICE_PATH=/usr/bin/
 SERVICE_ARGS=-d
 
 
