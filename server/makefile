@@ -7,7 +7,7 @@ CC = gcc
 CROSS_COMPILE ?=
 
 # Compiler flags
-CFLAGS = -Wall -Wextra
+CFLAGS = -Wall -Wextra -pthread
 
 # Source files
 SRC = aesdsocket.c

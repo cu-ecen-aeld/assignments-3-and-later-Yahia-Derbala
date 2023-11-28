@@ -9,6 +9,7 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <time.h>
+#include <sys/stat.h>
 
 #define PORT 9000
 #define DATA_FILE "/var/tmp/aesdsocketdata"
