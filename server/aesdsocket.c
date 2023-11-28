@@ -7,23 +7,49 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <pthread.h>
+#include <time.h>
 
 #define PORT 9000
 #define DATA_FILE "/var/tmp/aesdsocketdata"
 
-int server_fd;
+typedef struct thread_node {
+    pthread_t tid;
+    struct thread_node *next;
+} ThreadNode;
 
+int server_fd;
+pthread_mutex_t data_mutex = PTHREAD_MUTEX_INITIALIZER;
+ThreadNode *thread_list = NULL;                    // Linked list to manage threads
+
+// Signal handler to gracefully exit the program
 void signal_handler(int sig) {
     if (sig == SIGINT || sig == SIGTERM) {
         syslog(LOG_INFO, "Caught signal, exiting");
 
-        close(server_fd);
-        remove(DATA_FILE);
+        pthread_mutex_lock(&data_mutex);  // Lock mutex before cleanup
 
-        exit(EXIT_SUCCESS);
+        // Request exit from each thread and wait for threads to complete execution
+        ThreadNode *current = thread_list;
+        while (current != NULL) {
+            pthread_cancel(current->tid);  // Request thread exit
+            pthread_join(current->tid, NULL);  // Wait for thread to complete
+            ThreadNode *temp = current;
+            current = current->next;
+            free(temp);  // Free thread node memory
+        }
+        thread_list = NULL;
+
+        pthread_mutex_unlock(&data_mutex);  // Unlock mutex after cleanup
+
+        close(server_fd);  // Close server socket
+        remove(DATA_FILE); // Remove data file
+
+        exit(EXIT_SUCCESS); // Exit the program
     }
 }
 
+// Function to handle sending data back to the client
 void send_data_to_client(int client_socket) {
     FILE *fp = fopen(DATA_FILE, "r");
     if (fp == NULL) {
@@ -38,24 +64,84 @@ void send_data_to_client(int client_socket) {
 
     fclose(fp);
 }
+void *append_timestamp(void *arg) {
+    // Function to append timestamp every 10 seconds
+    while (1) {
+        time_t current_time = time(NULL);
+        struct tm *time_info = localtime(&current_time);
+
+        char timestamp[100];
+        strftime(timestamp, sizeof(timestamp), "timestamp:%a, %d %b %Y %H:%M:%S %z", time_info);
+        strcat(timestamp, "\n");
+
+        pthread_mutex_lock(&data_mutex); // Lock mutex for file writing
+
+        FILE *fp = fopen(DATA_FILE, "a");
+        if (fp == NULL) {
+            perror("fopen");
+            pthread_mutex_unlock(&data_mutex);
+            sleep(10);
+            continue;
+        }
+
+        fputs(timestamp, fp);
+        fclose(fp);
+
+        pthread_mutex_unlock(&data_mutex); // Unlock mutex after file writing
+
+        sleep(10);
+    }
+}
+// Function executed by each thread to handle client connection
+void *connection_handler(void *socket_desc) {
+    int client_socket = *(int *)socket_desc;  // Get client socket from argument
+    free(socket_desc);  // Free the allocated memory for socket descriptor
+
+    char buffer[1024];
+    ssize_t bytes_received;
+    FILE *fp = fopen(DATA_FILE, "a+");
+    if (fp == NULL) {
+        perror("fopen");
+        pthread_exit(NULL);  // Exit thread on file open error
+    }
+
+    while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
+        pthread_mutex_lock(&data_mutex);  // Lock mutex before critical section
+
+        buffer[bytes_received] = '\0';
+        fprintf(fp, "%s", buffer);  // Write received data to file
+
+        char *newline = strchr(buffer, '\n');
+        if (newline != NULL) {
+            fflush(fp);  // Flush data to file
+            send_data_to_client(client_socket);  // Send data back to client
+            memset(buffer, 0, sizeof(buffer));  // Clear buffer for next data
+        }
+
+        pthread_mutex_unlock(&data_mutex);  // Unlock mutex after critical section
+    }
+
+    close(client_socket);  // Close client socket
+    fclose(fp);             // Close file
+    pthread_exit(NULL);     // Exit thread
+}
 
 int main(int argc, char *argv[]) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = signal_handler;
+    sa.sa_handler = signal_handler; // Set signal handler function
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
 
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
-    int daemon_mode = 0; // Flag to indicate daemon mode
+    sigaction(SIGINT, &sa, NULL);   // Register SIGINT signal handler
+    sigaction(SIGTERM, &sa, NULL);  // Register SIGTERM signal handler
 
-    // Check for the -d argument to run as a daemon
+    int daemon_mode = 0;
+
     if (argc > 1 && strcmp(argv[1], "-d") == 0) {
-        daemon_mode = 1;
+        daemon_mode = 1;  // Enable daemon mode if "-d" argument provided
     }
 
-    // Fork if in daemon mode
     if (daemon_mode) {
         pid_t pid = fork();
         if (pid < 0) {
@@ -65,13 +151,13 @@ int main(int argc, char *argv[]) {
         if (pid > 0) {
             exit(EXIT_SUCCESS); // Parent process exits
         }
-        // Child process continues
-        umask(0); // Unmask the file mode
+        umask(0);
         if (setsid() < 0) {
             perror("Setsid failed");
             exit(EXIT_FAILURE);
         }
     }
+
     struct sockaddr_in address;
     int addrlen = sizeof(address);
 
@@ -94,45 +180,56 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    pthread_t timestamp_thread;
+    if (pthread_create(&timestamp_thread, NULL, append_timestamp, NULL) != 0) {
+        perror("pthread_create");
+        exit(EXIT_FAILURE);
+    }
+
     while (1) {
-        int new_socket;
-        if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) == -1) {
+        int *new_socket = malloc(sizeof(int));  // Allocate memory for new socket
+        if (new_socket == NULL) {
+            perror("malloc");
+            exit(EXIT_FAILURE);
+        }
+
+        *new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
+        if (*new_socket == -1) {
             perror("accept");
+            free(new_socket);
             exit(EXIT_FAILURE);
         }
 
-        char client_ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &(address.sin_addr), client_ip, INET_ADDRSTRLEN);
-        syslog(LOG_INFO, "Accepted connection from %s", client_ip);
-
-        char buffer[1024];
-        ssize_t bytes_received;
-        FILE *fp = fopen(DATA_FILE, "a+");
-        if (fp == NULL) {
-            perror("fopen");
+        pthread_t tid;
+        if (pthread_create(&tid, NULL, connection_handler, (void *)new_socket) != 0) {
+            perror("pthread_create");
+            free(new_socket);
             exit(EXIT_FAILURE);
         }
 
-        while ((bytes_received = recv(new_socket, buffer, sizeof(buffer), 0)) > 0) {
-            buffer[bytes_received] = '\0';
-            fprintf(fp, "%s", buffer);
+        // Create a new node for the linked list to store thread information
+        ThreadNode *new_node = (ThreadNode *)malloc(sizeof(ThreadNode));
+        if (new_node == NULL) {
+            perror("malloc");
+            exit(EXIT_FAILURE);
+        }
+        new_node->tid = tid;
+        new_node->next = NULL;
 
-            // Check for newline to handle complete packets
-            char *newline = strchr(buffer, '\n');
-            if (newline != NULL) {
-                fflush(fp); // Flush data to file
+        pthread_mutex_lock(&data_mutex);  // Lock mutex before adding to linked list
 
-                // Send data back to client when a complete packet is received
-                send_data_to_client(new_socket);
-
-                // Clear buffer and continue receiving data
-                memset(buffer, 0, sizeof(buffer));
+        // Add the new thread node to the linked list
+        if (thread_list == NULL) {
+            thread_list = new_node;
+        } else {
+            ThreadNode *current = thread_list;
+            while (current->next != NULL) {
+                current = current->next;
             }
+            current->next = new_node;
         }
 
-        close(new_socket);
-        fclose(fp);
-        syslog(LOG_INFO, "Closed connection from %s", client_ip);
+        pthread_mutex_unlock(&data_mutex);  // Unlock mutex after adding to linked list
     }
 
     return 0;
