@@ -18,6 +18,8 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+#include "aesd-circular-buffer.h"
+
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -54,7 +56,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         goto out;
 
     /* Locking the data structure */
-    ret = mutex_lock_interuptible(&dev->lock);
+    ret = mutex_lock_interruptible(&dev->lock);
     /* Check if the mutex could be locked */
     if(ret != 0)
     {
@@ -68,7 +70,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     /* Find entry offset in respect to the file position */
     eptr = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->cbuffer,*f_pos,cbuffer_offset);
     /* Check if entry was found */
-    if(eptr==null)
+    if(eptr==NULL)
     {
         PDEBUG("Failed to find entry offset in read \n");
         /* Unlock mutex */
@@ -125,13 +127,89 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,loff_
     dev = filp->private_data;
 
     userdata=kmalloc(count,GFP_KERNEL);
+
     if(userdata==NULL)
     {
         PDEBUG("Failed to allocated memory for write data \n");
         goto cleanup;
     }
+    
+    ret = copy_from_user(userdata,buf,count);
+
+    if(ret !=0 )
+    {
+        retval = -EFAULT;
+        goto cleanup;
+    }
+
+    ret = mutex_lock_interruptible(&dev->lock);
+    if (ret!=0)
+    {
+        PDEBUG("Failed to lock the mutex in write \n");
+        retval =-ERESTARTSYS;
+        goto cleanup;
+    }
+
+    while(index < count)
+    {
+        if(userdata[index]=='\n')
+        {
+            newlinefound=1;
+            break;
+        }
+        index++;
+    }
+
+    if(newlinefound)
+    {
+        entry_size=index+1;
+    }else{
+        entry_size=count;
+    }
+
+    if(dev->size==0)
+    {
+        dev->wbuffer = kmalloc(entry_size,GFP_KERNEL);
+        if(dev->wbuffer==NULL)
+        {
+            PDEBUG("Failed to allocate buffer size \n");
+            goto cleanup;
+        }
+    }else{
+        dev->wbuffer=krealloc(dev->wbuffer,(dev->size+entry_size),GFP_KERNEL);
+        if(dev->wbuffer==NULL)
+        {
+            PDEBUG("Failed to realloc buffer size");
+            goto cleanup;
+        }
+    }
+
+    memcpy(dev->wbuffer+dev->size,userdata,entry_size);
+    dev->size+=entry_size;
+
+    if(newlinefound == 1)
+    {
+        new_entry.size=dev->size;
+        new_entry.buffptr=dev->wbuffer;
+        aesd_circular_buffer_add_entry(&dev->cbuffer,&new_entry);
+        dev->size=0;
+        newlinefound=0;
+    }
+    
+    retval = entry_size;
+    *f_pos+=retval;
+
+    mutex_unlock(&dev->lock);
+    kfree(userdata);;
     return retval;
+cleanup:
+    if (userdata != NULL) {
+        kfree(userdata);
+    }
+    mutex_unlock(&dev->lock);
+    return retval; // Return with error code
 }
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
@@ -189,7 +267,7 @@ void aesd_cleanup_module(void)
     cdev_del(&aesd_device.cdev);
 
 
-    mutex_destry(^&aesd_device.lock);
+    mutex_destroy(&aesd_device.lock);
     uint8_t index;
     struct aesd_buffer_entry *eptr;
     /* iterate through each entry and free allocated memory */
