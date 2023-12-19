@@ -7,14 +7,8 @@
 
 #ifndef AESD_CHAR_DRIVER_AESDCHAR_H_
 #define AESD_CHAR_DRIVER_AESDCHAR_H_
+
 #include "aesd-circular-buffer.h"
-#include <linux/module.h>
-#include <linux/init.h>
-#include <linux/printk.h>
-#include <linux/types.h>
-#include <linux/cdev.h>
-#include <linux/fs.h> // file_operations
-#include <linux/slab.h>
 
 #define AESD_DEBUG 1  //Remove comment on this line to enable debug
 
@@ -36,11 +30,17 @@ struct aesd_dev
     /**
      * TODO: Add structure(s) and locks needed to complete assignment requirements
      */
-    struct cdev cdev;     /* Char device structure      */
-    struct mutex lock;
-    struct aesd_circular_buffer cbuffer;
-    size_t size;
-    char* wbuffer;
+     struct cdev cdev;     /* Char device structure      */
+      // Added
+     struct mutex lock;
+     struct aesd_circular_buffer cbuffer;
+     //dev entry buffer for future writes
+     //struct aesd_buffer_entry ebuffer; <-memcopy pulled up warning due to buffptr being a const
+     size_t size;
+     char* wbuffer;
+     
+
 };
+
 
 #endif /* AESD_CHAR_DRIVER_AESDCHAR_H_ */

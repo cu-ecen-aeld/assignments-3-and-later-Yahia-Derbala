@@ -11,24 +11,53 @@
  *
  */
 
-#include "aesdchar.h"
+#include <linux/module.h>
+#include <linux/init.h>
+#include <linux/printk.h>
+#include <linux/types.h>
+#include <linux/cdev.h>
+#include <linux/fs.h> // file_operations
 
+
+#include <linux/slab.h>
+#include <linux/uaccess.h>
+#include <linux/string.h>
+#include <linux/errno.h>
+
+#include "aesdchar.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
-MODULE_AUTHOR("Yahia-Derbala"); 
+MODULE_AUTHOR("Fenson-F"); /** TODO: fill in your name **/
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev aesd_device;
 
 int aesd_open(struct inode *inode, struct file *filp)
-{
-    // Get the pointer to the device structure from the inode
-    struct aesd_dev *dev = container_of(inode->i_cdev,struct aesd_dev,cdev);
-    // Debugging log message to indicate that the device is being opened
+{   
+     /**
+     * TODO: handle open
+     */
+
     PDEBUG("open");
-    // Update the private data in the file structure with a pointer to the device structure
-    filp->private_data=dev;
+
+    struct aesd_dev *dev;
+
+    dev = container_of(inode->i_cdev, struct aesd_dev, cdev);
+
+    filp->private_data = dev; 
+   
+    return 0;
+}
+
+int aesd_release(struct inode *inode, struct file *filp)
+{
+    PDEBUG("release");
+    /**
+     * TODO: handle release
+     */
+
+     //nothing to add since flip is a pointer
     return 0;
 }
 
@@ -36,170 +65,174 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
     ssize_t retval = 0;
+    PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
+    /**
+     * TODO: handle read
+     */
+    //my vars
     struct aesd_dev *dev = filp->private_data;
     struct aesd_buffer_entry *eptr;
-    size_t cbuffer_offset=0;
+    size_t cbuffer_offset = 0;
     int readsize = count;
     ssize_t ret;
-    PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
 
-    /* If given offset is beyond device size*/
-    if (*f_pos>=dev->size)
+    if(*f_pos >= dev->size) {
         goto out;
+    }
+    
+    ret=mutex_lock_interruptible(&dev->lock);
 
-    /* Locking the data structure */
-    ret = mutex_lock_interruptible(&dev->lock);
-    /* Check if the mutex could be locked */
-    if(ret != 0)
-    {
-        /* If mutex was not locked, display warning */
-        PDEBUG("Failed to lock mutex!\n");
-        /* Indicate system call should restart */
+    if(ret != 0) {
+        PDEBUG("Failure: Mutex could not lock \n");
         retval = -ERESTARTSYS;
         goto out;
     }
 
-    /* Find entry offset in respect to the file position */
-    eptr = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->cbuffer,*f_pos,&cbuffer_offset);
-    /* Check if entry was found */
-    if(eptr==NULL)
+    //find offset
+    eptr = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->cbuffer, *f_pos, &cbuffer_offset);
+    if(eptr == NULL)
     {
-        PDEBUG("Failed to find entry offset in read \n");
-        /* Unlock mutex */
+        PDEBUG("Failure: Could not find entry offset in read \n");
         mutex_unlock(&dev->lock);
         goto out;
     }
-    /* Calculate read size and making sure it doesn't exceed device size */
-    if(cbuffer_offset + count > dev->size)
-    {
-        /* Calculate readsize to be the remaining bytes available for reading */
-        readsize=dev->size - cbuffer_offset;
+
+    //calculate size to read and comparing it to size counted to avoid reading more then need
+    //using cbuffer_offset rather then *f_pos as shown in textbook example
+    if(cbuffer_offset + count > dev->size) {
+        readsize = dev->size - cbuffer_offset;
     }
 
-    /* Copy data to user space buffer */
-    ret = copy_to_user(buf,eptr->buffptr + cbuffer_offset,readsize);
-    if(ret != 0)
-    {
-        PDEBUG("Failed to copy to user in read \n");
+    ret = copy_to_user(buf, eptr->buffptr+cbuffer_offset, readsize);
+    if (ret != 0){
+        PDEBUG("Failure: Could not copy to user in read \n");
         mutex_unlock(&dev->lock);
-        /* Indicate a memory access error */
-        retval = -EFAULT; 
+        retval = -EFAULT;
         goto out;
     }
 
     mutex_unlock(&dev->lock);
-    *f_pos+=count;
-    PDEBUG("Success: aesd_read has read %d bytes of %ld\n",readsize,count);
+    *f_pos += count;
+    PDEBUG("Success: aesd_read read %d bytes of %ld\n", readsize, count);
     return count;
+    
+    out:
+        return retval;
 
-out:
-    return retval;
-} 
-
-int aesd_release(struct inode *inode, struct file *filp)
-{
-    PDEBUG("release");
-
-    return 0;
 }
 
-ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,loff_t *f_pos)
+ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
+                loff_t *f_pos)
 {
     ssize_t retval = -ENOMEM;
-    struct aesd_dev *dev ;
+    PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
+    /**
+     * TODO: handle write
+
+     copy_from_user (__user,count);
+     */
+    struct aesd_dev *dev;
     struct aesd_buffer_entry new_entry;
     char *userdata;
     ssize_t ret;
-    size_t index =0;
-    size_t entry_size=0;
-    ssize_t newlinefound = 0;
+    size_t index = 0;
+    size_t entry_size = 0;
+    ssize_t newlinefound =  0;
 
-    PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
-    
     dev = filp->private_data;
-
-    userdata=kmalloc(count,GFP_KERNEL);
-
-    if(userdata==NULL)
-    {
-        PDEBUG("Failed to allocated memory for write data \n");
-        goto cleanup;
+    //get data from user first
+    userdata = kmalloc(count, GFP_KERNEL);
+    if(userdata == NULL){
+        PDEBUG("Failure: Could not allocate memory for write data \n");
+        goto out;
     }
-    
-    ret = copy_from_user(userdata,buf,count);
 
-    if(ret !=0 )
-    {
+    ret = copy_from_user(userdata, buf, count);
+    if(ret != 0){
         retval = -EFAULT;
-        goto cleanup;
+        kfree(userdata);
+        goto out;
     }
 
-    ret = mutex_lock_interruptible(&dev->lock);
-    if (ret!=0)
-    {
-        PDEBUG("Failed to lock the mutex in write \n");
-        retval =-ERESTARTSYS;
-        goto cleanup;
+    ret=mutex_lock_interruptible(&dev->lock);
+    if(ret != 0) {
+        PDEBUG("Failure: Mutex could not lock \n");
+        retval = -ERESTARTSYS;
+        goto out;
     }
+    //check for newline
 
-    while(index < count)
-    {
-        if(userdata[index]=='\n')
-        {
-            newlinefound=1;
+    while((index < count)){
+        if(userdata[index] == '\n'){
+            newlinefound = 1;
             break;
         }
+
+        //still want to add 1 even if \n has been found to account for it
         index++;
     }
 
-    if(newlinefound)
-    {
-        entry_size=index+1;
-    }else{
-        entry_size=count;
+    if(newlinefound == 1){
+        entry_size = index +1;
+    }
+    else {
+        entry_size = count;
     }
 
-    if(dev->size==0)
-    {
-        dev->wbuffer = kmalloc(entry_size,GFP_KERNEL);
-        if(dev->wbuffer==NULL)
-        {
-            PDEBUG("Failed to allocate buffer size \n");
-            goto cleanup;
-        }
-    }else{
-        dev->wbuffer=krealloc(dev->wbuffer,(dev->size+entry_size),GFP_KERNEL);
-        if(dev->wbuffer==NULL)
-        {
-            PDEBUG("Failed to realloc buffer size");
-            goto cleanup;
-        }
+    //reallocate buffer now that size is known
+
+    if(dev->size == 0) {
+        dev->wbuffer = kmalloc(entry_size, GFP_KERNEL);
+        if( dev->wbuffer== NULL) {
+        PDEBUG("Failure: Could not allocate buffer size \n");
+        kfree(userdata);
+        mutex_unlock(&dev->lock);
+        goto out;}
+    } 
+    else {
+        dev->wbuffer = krealloc(dev->wbuffer, (dev->size + entry_size), GFP_KERNEL);
+        if( dev->wbuffer== NULL) {
+            PDEBUG("Failure: Could not reallocate buffer size \n");
+            kfree(userdata);
+            mutex_unlock(&dev->lock);
+            goto out;
+        } 
     }
 
-    memcpy(dev->wbuffer+dev->size,userdata,entry_size);
-    dev->size+=entry_size;
+    memcpy(dev->wbuffer + dev->size, userdata, entry_size);
+    dev->size += entry_size;
+    //kfree(userdata);
 
-    if(newlinefound == 1)
-    {
-        new_entry.size=dev->size;
+    if(newlinefound == 1){
+
+        new_entry.size = dev->size;
         new_entry.buffptr=dev->wbuffer;
-        aesd_circular_buffer_add_entry(&dev->cbuffer,&new_entry);
-        dev->size=0;
-        newlinefound=0;
+
+        aesd_circular_buffer_add_entry(&dev->cbuffer, &new_entry);
+        //kfree(new_entry);
+
+        //dev->wbuffer= NULL;
+        dev->size = 0;
+        newlinefound = 0;
+
     }
-    
+
     retval = entry_size;
-    *f_pos +=retval;
+
+    *f_pos += retval;
 
     mutex_unlock(&dev->lock);
-    kfree(userdata);
-    return retval;
-cleanup:
-    if (userdata != NULL) {
+    
+    if(userdata!=NULL){
         kfree(userdata);
     }
-    mutex_unlock(&dev->lock);
-    return retval; // Return with error code
+    return retval;
+
+    out:
+    if(userdata!=NULL){
+        kfree(userdata);
+    }
+    return retval;
 }
 
 struct file_operations aesd_fops = {
@@ -237,9 +270,10 @@ int aesd_init_module(void)
     }
     memset(&aesd_device,0,sizeof(struct aesd_dev));
 
+    /**
+     * TODO: initialize the AESD specific portion of the device
+     */
 
-
-    /* initialize mutex and circular buffer */
     mutex_init(&aesd_device.lock);
     aesd_circular_buffer_init(&aesd_device.cbuffer);
 
@@ -255,15 +289,23 @@ int aesd_init_module(void)
 void aesd_cleanup_module(void)
 {
     dev_t devno = MKDEV(aesd_major, aesd_minor);
+
+    cdev_del(&aesd_device.cdev);
+
+    /**
+     * TODO: cleanup AESD specific poritions here as necessary
+     */
+
+    mutex_destroy(&aesd_device.lock);
+
+    //from aesd-circular-buffer header
     uint8_t index;
     struct aesd_buffer_entry *eptr;
-    cdev_del(&aesd_device.cdev);
-    mutex_destroy(&aesd_device.lock);
-    /* iterate through each entry and free allocated memory */
-    AESD_CIRCULAR_BUFFER_FOREACH(eptr, &aesd_device.cbuffer, index) 
-    {
-        kfree(eptr->buffptr);
+
+    AESD_CIRCULAR_BUFFER_FOREACH(eptr,&aesd_device.cbuffer,index) { 
+            kfree(eptr->buffptr);
     }
+
     unregister_chrdev_region(devno, 1);
 }
 
