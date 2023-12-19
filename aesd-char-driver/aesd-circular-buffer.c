@@ -10,10 +10,10 @@
 
 #ifdef __KERNEL__
 #include <linux/string.h>
-#include <linux/slab.h>
 #else
 #include <string.h>
 #endif
+#include <linux/slab.h>
 
 #include "aesd-circular-buffer.h"
 
