@@ -7,8 +7,7 @@ CC = gcc
 CROSS_COMPILE ?=
 
 # Compiler flags
-CFLAGS = -Wall -Wextra -pthread -lgcc_s -lrt"
-
+CFLAGS = -Wall -Wextra -pthread -lgcc_s -lrt
 
 # Source files
 SRC = aesdsocket.c
@@ -25,4 +24,3 @@ clean:
 	rm -f $(OUTPUT)
 
 .PHONY: all clean
-

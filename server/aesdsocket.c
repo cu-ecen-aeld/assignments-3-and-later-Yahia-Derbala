@@ -12,7 +12,14 @@
 #include <sys/stat.h>
 
 #define PORT 9000
+
+#define USE_AESD_CHAR_DEVICE
+
+#ifdef USE_AESD_CHAR_DEVICE
+#define DATA_FILE "/dev/aesdchar"
+#else
 #define DATA_FILE "/var/tmp/aesdsocketdata"
+#endif
 
 typedef struct thread_node {
     pthread_t tid;
@@ -44,8 +51,9 @@ void signal_handler(int sig) {
         pthread_mutex_unlock(&data_mutex);  // Unlock mutex after cleanup
 
         close(server_fd);  // Close server socket
+        #ifndef USE_AESD_CHAR_DEVICE
         remove(DATA_FILE); // Remove data file
-
+        #endif
         exit(EXIT_SUCCESS); // Exit the program
     }
 }
@@ -65,6 +73,7 @@ void send_data_to_client(int client_socket) {
 
     fclose(fp);
 }
+    #ifndef USE_AESD_CHAR_DEVICE
 void *append_timestamp(void *arg) {
     // Function to append timestamp every 10 seconds
     while (1) {
@@ -93,6 +102,7 @@ void *append_timestamp(void *arg) {
         sleep(10);
     }
 }
+    #endif
 // Function executed by each thread to handle client connection
 void *connection_handler(void *socket_desc) {
     int client_socket = *(int *)socket_desc;  // Get client socket from argument
@@ -181,11 +191,14 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    pthread_t timestamp_thread;
+
+    #ifndef USE_AESD_CHAR_DEVICE
+        pthread_t timestamp_thread;
     if (pthread_create(&timestamp_thread, NULL, append_timestamp, NULL) != 0) {
         perror("pthread_create");
         exit(EXIT_FAILURE);
     }
+    #endif
 
     while (1) {
         int *new_socket = malloc(sizeof(int));  // Allocate memory for new socket

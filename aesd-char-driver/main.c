@@ -11,14 +11,7 @@
  *
  */
 
-#include <linux/module.h>
-#include <linux/init.h>
-#include <linux/printk.h>
-#include <linux/types.h>
-#include <linux/cdev.h>
-#include <linux/fs.h> // file_operations
 #include "aesdchar.h"
-#include "aesd-circular-buffer.h"
 
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
@@ -43,13 +36,13 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
     ssize_t retval = 0;
-    PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
 
     struct aesd_dev *dev = filp->private_data;
     struct aesd_buffer_entry *eptr;
     size_t cbuffer_offset=0;
     int readsize = count;
     ssize_t ret;
+    PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
 
     /* If given offset is beyond device size*/
     if (*f_pos>=dev->size)
@@ -68,7 +61,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     }
 
     /* Find entry offset in respect to the file position */
-    eptr = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->cbuffer,*f_pos,cbuffer_offset);
+    eptr = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->cbuffer,*f_pos,&cbuffer_offset);
     /* Check if entry was found */
     if(eptr==NULL)
     {
@@ -111,11 +104,9 @@ int aesd_release(struct inode *inode, struct file *filp)
     return 0;
 }
 
-
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,loff_t *f_pos)
 {
     ssize_t retval = -ENOMEM;
-    PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
     struct aesd_dev *dev ;
     struct aesd_buffer_entry new_entry;
     char *userdata;
@@ -124,6 +115,8 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,loff_
     size_t entry_size=0;
     ssize_t newlinefound = 0;
 
+    PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
+    
     dev = filp->private_data;
 
     userdata=kmalloc(count,GFP_KERNEL);
@@ -197,7 +190,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,loff_
     }
     
     retval = entry_size;
-    *f_pos+=retval;
+    *f_pos +=retval;
 
     mutex_unlock(&dev->lock);
     kfree(userdata);;
@@ -263,13 +256,10 @@ int aesd_init_module(void)
 void aesd_cleanup_module(void)
 {
     dev_t devno = MKDEV(aesd_major, aesd_minor);
-
-    cdev_del(&aesd_device.cdev);
-
-
-    mutex_destroy(&aesd_device.lock);
     uint8_t index;
     struct aesd_buffer_entry *eptr;
+    cdev_del(&aesd_device.cdev);
+    mutex_destroy(&aesd_device.lock);
     /* iterate through each entry and free allocated memory */
     AESD_CIRCULAR_BUFFER_FOREACH(eptr, &aesd_device.cbuffer, index) 
     {

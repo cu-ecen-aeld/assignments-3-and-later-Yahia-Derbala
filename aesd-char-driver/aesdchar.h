@@ -7,7 +7,13 @@
 
 #ifndef AESD_CHAR_DRIVER_AESDCHAR_H_
 #define AESD_CHAR_DRIVER_AESDCHAR_H_
-
+#include "aesd-circular-buffer.h"
+#include <linux/module.h>
+#include <linux/init.h>
+#include <linux/printk.h>
+#include <linux/types.h>
+#include <linux/cdev.h>
+#include <linux/fs.h> // file_operations
 #define AESD_DEBUG 1  //Remove comment on this line to enable debug
 
 #undef PDEBUG             /* undef it, just in case */
@@ -23,7 +29,6 @@
 #  define PDEBUG(fmt, args...) /* not debugging: nothing */
 #endif
 
-#include "aesd-circular-buffer.h"
 struct aesd_dev
 {
     /**
@@ -35,6 +40,5 @@ struct aesd_dev
     size_t size;
     char* wbuffer;
 };
-
 
 #endif /* AESD_CHAR_DRIVER_AESDCHAR_H_ */
