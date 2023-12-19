@@ -33,7 +33,7 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
     * TODO: implement per description
     */
     size_t cumulative_offset = 0;
-uint8_t i
+    uint8_t i;
     for ( i= buffer->out_offs; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i = (i + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) {
         // Check if the buffer is not full and the current index is equal to in_offs
         if (!(buffer->full) && i == buffer->in_offs) {
