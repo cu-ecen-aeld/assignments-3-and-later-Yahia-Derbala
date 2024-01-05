@@ -78,7 +78,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 
     PDEBUG("Data copied: %s \n", ret_entry->buffptr);
     PDEBUG("new offset: %lld\n", *f_pos);
-    PDEBUG("reval: %ld\n", retval);
+    PDEBUG("retval: %ld\n", retval);
 
 inCaseOfFailure:
     mutex_unlock(&(dev->lock));
@@ -211,9 +211,9 @@ static long aesd_adjust_file_offset(struct file *filp , unsigned int write_cmd,u
 
     for (index =0 ; index <write_cmd ; index ++)
     {
-        retval += buffer->entry[indx].size;
+        retval += buffer->entry[index].size;
     }
-    reval+= write_cmd_offset;
+    retval+= write_cmd_offset;
 inCaseOfFailure:
     mutex_unlock(&(dev->lock));
     return retval;
