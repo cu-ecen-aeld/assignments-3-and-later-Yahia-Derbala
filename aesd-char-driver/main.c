@@ -204,6 +204,7 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
             {
                 loff_t target_offset = 0;
                 struct aesd_seekto seekto;
+                uint8_t index;
                 if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto))) {
                     retval = -EFAULT;
                     break;
@@ -215,7 +216,7 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
                     break;
                 }
 
-                for (uint8_t index = 0; index < seekto.write_cmd; index++) {
+                for (ndex = 0; index < seekto.write_cmd; index++) {
                     if (dev->buffer.entry[index].buffptr) {
                         target_offset += dev->buffer.entry[index].size;
                     }
