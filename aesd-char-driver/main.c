@@ -138,107 +138,106 @@ inCaseOfFailure:
     return retval;
 }
 
-loff_t aesd_llseek(struct file *filp, loff_t f_offs, int whence)
-{
-    uint8_t index;
+loff_t aesd_llseek(struct file *filp, loff_t f_offs, int whence) {
     struct aesd_dev *dev = filp->private_data;
     loff_t retval;
-    loff_t buffer_size=0;
+    loff_t total_size = 0;
+    uint8_t index;
 
-
-    if(mutex_lock_interruptible(&(dev->lock)))
-    {
+    if (mutex_lock_interruptible(&(dev->lock))) {
+        PDEBUG("ERROR: Couldn't acquire lock\n");
         return -ERESTARTSYS;
     }
 
-    switch(whence)
-    {
+    // Calculate the total size of all commands in the circular buffer
+    for (index = 0; index < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; index++) {
+        if (dev->buffer.entry[index].buffptr) {
+            total_size += dev->buffer.entry[index].size;
+        }
+    }
+
+    PDEBUG("aesd_llseek: Current position: %lld, Offset: %lld, Whence: %d\n", filp->f_pos, f_offs, whence);
+
+    switch (whence) {
         case SEEK_SET:
-            retval=f_offs;
-            PDEBUG("Used SEEK_SET to set offset to %lld\n",retval);
+            retval = f_offs;
+            PDEBUG("aesd_llseek: SEEK_SET, New position: %lld\n", retval);
             break;
         case SEEK_CUR:
-            retval=filp->f_pos+f_offs;
-            PDEBUG("Used SEEK_CUR to increment the offset to %lld\n",retval);
+            retval = filp->f_pos + f_offs;
+            PDEBUG("aesd_llseek: SEEK_CUR, New position: %lld\n", retval);
             break;
         case SEEK_END:
-            for(index = 0; index < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;index++)
-            {
-                if(dev->buffer.entry[index].buffptr)
-                {
-                    buffer_size+=dev->buffer.entry[index].size;
-                }
-            }
-            retval=buffer_size+f_offs;
-            PDEBUG("Used SEEK_END to set the offset to %lld\n", retval);
+            retval = total_size + f_offs;
+            PDEBUG("aesd_llseek: SEEK_END, New position: %lld\n", retval);
             break;
         default:
-            retval= -EINVAL;
-            goto inCaseOfFailure;
+            PDEBUG("aesd_llseek: Invalid whence value: %d\n", whence);
+            retval = -EINVAL;
+            goto out;
     }
-    if (retval < 0) {
-        PDEBUG("Invalid arguments, offset can't be set to %lld\n", retval);
+
+    // Check if the new file position is within the range of the circular buffer
+    if (retval < 0 || retval > total_size) {
+        PDEBUG("aesd_llseek: New position out of range: %lld\n", retval);
         retval = -EINVAL;
-        goto inCaseOfFailure;
+        goto out;
     }
 
     filp->f_pos = retval;
 
-inCaseOfFailure:
+out:
     mutex_unlock(&(dev->lock));
     return retval;
 }
 
-static long aesd_adjust_file_offset(struct file *filp , unsigned int write_cmd,unsigned int write_cmd_offset)
-{
-    struct aesd_dev *dev = filp->private_data;
-    struct aesd_circular_buffer *buffer = &(dev->buffer);
-    uint8_t index;
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
     long retval = 0;
+    struct aesd_dev *dev = filp->private_data;
 
-    if(mutex_lock_interruptible(&(dev->lock)))
-    {
-        return -ERESTARTSYS;
-    }  
-
-    if((write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) || 
-    (buffer->entry[write_cmd].buffptr==NULL)||
-    (buffer->entry[write_cmd].size<=write_cmd_offset))
-    {
-        retval = -EINVAL;
-        PDEBUG("Error : Invalid argument \n");
-        goto inCaseOfFailure;
+    if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC) {
+        return -ENOTTY;
     }
 
-    for (index =0 ; index <write_cmd ; index ++)
-    {
-        retval += buffer->entry[index].size;
-    }
-    retval+= write_cmd_offset;
-inCaseOfFailure:
-    mutex_unlock(&(dev->lock));
-    return retval;
-}
-
-long aesd_ioctl (struct file *filp , unsigned int cmd , unsigned long arg)
-{
-    long retval;
-    struct aesd_seekto seekto;
-    switch(cmd){
+    switch (cmd) {
         case AESDCHAR_IOCSEEKTO:
-            if(copy_from_user(&seekto,(const void __user *)arg,sizeof(seekto))){
-                PDEBUG("ioctl: Error copying data from user\n");
-                retval =-EFAULT;
-            }else
             {
-                PDEBUG("ioctl: Adjusting file offset\n");
-                retval = aesd_adjust_file_offset(filp,seekto.write_cmd,seekto.write_cmd_offset);
+                loff_t target_offset = 0;
+                struct aesd_seekto seekto;
+                if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto))) {
+                    retval = -EFAULT;
+                    break;
+                }
+
+                if (seekto.write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED ||
+                    seekto.write_cmd_offset >= dev->buffer.entry[seekto.write_cmd].size) {
+                    retval = -EINVAL;
+                    break;
+                }
+
+                for (uint8_t index = 0; index < seekto.write_cmd; index++) {
+                    if (dev->buffer.entry[index].buffptr) {
+                        target_offset += dev->buffer.entry[index].size;
+                    }
+                }
+                target_offset += seekto.write_cmd_offset;
+
+                if (target_offset < 0 || target_offset > dev->buffer.entry[seekto.write_cmd].size) {
+                    retval = -EINVAL;
+                    break;
+                }
+
+                filp->f_pos = target_offset;
+                retval = 0;
+                PDEBUG("AESDCHAR_IOCSEEKTO: Set file position to %lld\n", filp->f_pos);
             }
             break;
         default:
-            retval=ENOTTY;
-        }
-        return retval;
+            retval = -ENOTTY;
+            break;
+    }
+
+    return retval;
 }
 
 struct file_operations aesd_fops = {
