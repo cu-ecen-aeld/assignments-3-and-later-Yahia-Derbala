@@ -10,7 +10,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <sys/stat.h>
-
+#include <sys/ioctl.h>
 #define PORT 9000
 
 #define USE_AESD_CHAR_DEVICE
@@ -116,17 +116,38 @@ void *connection_handler(void *socket_desc) {
         pthread_exit(NULL);  // Exit thread on file open error
     }
 
+
+    int aesd_char_fd = open(DATA_FILE, O_RDWR); // Open the aesdchar device
+    if (aesd_char_fd == -1) {
+        perror("open aesdchar device");
+        fclose(fp);
+        pthread_exit(NULL); // Exit thread on device open error
+    }
+
     while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
         pthread_mutex_lock(&data_mutex);  // Lock mutex before critical section
 
         buffer[bytes_received] = '\0';
-        fprintf(fp, "%s", buffer);  // Write received data to file
-
-        char *newline = strchr(buffer, '\n');
-        if (newline != NULL) {
-            fflush(fp);  // Flush data to file
-            send_data_to_client(client_socket);  // Send data back to client
-            memset(buffer, 0, sizeof(buffer));  // Clear buffer for next data
+// Check for the specific command AESDCHAR_IOCSEEKTO:X,Y
+        if (strncmp(buffer, "AESDCHAR_IOCSEEKTO:", 19) == 0) {
+            unsigned int x, y;
+            if (sscanf(buffer + 19, "%u,%u", &x, &y) == 2) {
+                // Perform ioctl AESDCHAR_IOCSEEKTO command
+                if (ioctl(aesd_char_fd, AESDCHAR_IOCSEEKTO, ((x << 16) | y)) == -1) {
+                    perror("ioctl AESDCHAR_IOCSEEKTO");
+                    close(aesd_char_fd);
+                    fclose(fp);
+                    pthread_exit(NULL); // Exit thread on ioctl error
+                }
+            }
+        } else {
+            fprintf(fp, "%s", buffer);  // Write received data to file
+            char *newline = strchr(buffer, '\n');
+            if (newline != NULL) {
+                fflush(fp);  // Flush data to file
+                send_data_to_client(client_socket);  // Send data back to client
+                memset(buffer, 0, sizeof(buffer));  // Clear buffer for next data
+            }
         }
 
         pthread_mutex_unlock(&data_mutex);  // Unlock mutex after critical section
@@ -134,6 +155,7 @@ void *connection_handler(void *socket_desc) {
 
     close(client_socket);  // Close client socket
     fclose(fp);             // Close file
+    close(aesd_char_fd);    // Close aesdchar device
     pthread_exit(NULL);     // Exit thread
 }
 

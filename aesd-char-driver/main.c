@@ -137,12 +137,117 @@ inCaseOfFailure:
     mutex_unlock(&(dev->lock));
     return retval;
 }
+
+loff_t aesd_llseek(struct file *filp, loff_t f_offs, int whence)
+{
+    uint8_t index;
+    struct aesd_dev *dev = filp->private_data;
+    loff_t retval;
+    loff_t buffer_size=0;
+
+
+    if(mutex_lock_interruptible(&(dev->lock)))
+    {
+        return -ERESTARTSYS;
+    }
+
+    switch(whence)
+    {
+        case SEEK_SET:
+            retval=f_offs;
+            PDEBUG("Used SEEK_SET to set offset to %lld\n",retval);
+            break;
+        case SEEK_CUR:
+            retval=filp->f_pos+f_offs;
+            PDEBUG("Used SEEK_CUR to increment the offset to %lld\n",retval);
+            break;
+        case SEEK_END:
+            for(index = 0; index < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;index++)
+            {
+                if(dev->buffer.entry[index].buffptr)
+                {
+                    buffer_size+=dev->buffer.entry[index].size;
+                }
+            }
+            retval=buffer_size+f_offs;
+            PDEBUG("Used SEEK_END to set the offset to %lld\n", retval);
+            break;
+        default:
+        retval= -EINVAL;
+        goto inCaseOfFailure;
+    if (retval < 0) {
+        PDEBUG("Invalid arguments, offset can't be set to %lld\n", retval);
+        retval = -EINVAL;
+        goto inCaseOfFailure;
+    }
+
+    filp->f_pos = retval;
+
+inCaseOfFailure:
+    mutex_unlock(&(dev->lock));
+    return retval;
+}
+
+static long aesd_adjust_file_offset(struct file *filp , unsigned int write_cmd,unsigned int write_cmd_offset)
+{
+  struct aesd_dev *dev = filp->private_data;
+  struct aesd_circular_buffer *buffer = &(dev->buffer);
+  uint8_t index;
+  long retval = 0;
+
+  if(mutex_lock_interruptible(&(dev->lock)))
+  {
+    return -ERESTARTSYS;
+  }  
+
+    if((write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) || 
+    (buffer->entry[write_cmd].buffptr==NULL)||
+    (buffer->entry[write_cmd].size<=write_cmd_offset))
+    {
+        retval = -EINVAL;
+        PDEBUG("Error : Invalid argument \n");
+        goto inCaseOfFailure;
+    }
+
+    for (index =0 ; index <write_cmd ; index ++)
+    {
+        retval += buffer->entry[indx].size;
+    }
+    reval+= write_cmd_offset;
+inCaseOfFailure:
+    mutex_unlock(&(dev->lock));
+    return retval;
+}
+
+long aesd_ioctl (struct file *filp , unsigned int cmd , unsigned long arg)
+{
+    long retval;
+    switch(cmd){
+        case AESDCHAR_IOCSEEKTO:
+            struct aesd_seekto seekto;
+            if(copy_from_user(&seekto,(const void __user *)arg,sizeof(seekto))){
+                PDEBUG("ioctl: Error copying data from user\n");
+                retval =-EFAULT;
+            }else
+            {
+                PDEBUG("ioctl: Adjusting file offset\n");
+                retval = aesd_adjust_file_offset(filp,seekto.write_cmd,seekto.write_cmd_offset);
+            }
+            break;
+        default:
+            retval=ENOTTY;
+        }
+        return retval;
+}
+
 struct file_operations aesd_fops = {
     .owner = THIS_MODULE,
     .read = aesd_read,
     .write = aesd_write,
     .open = aesd_open,
     .release = aesd_release,
+    .llseek = aesd_llseek,
+    .unlocked_ioctl = aesd_ioctl
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev) {
@@ -201,7 +306,14 @@ void aesd_cleanup_module(void) {
 
     // if (aesd_device.data_buffer.buffptr)
     //     kfree(aesd_device.data_buffer.buffptr);
-
+  for (index = 0; index < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; index++) {
+        if (aesd_device.buffer.entry[index].buffptr != NULL) {
+            kfree(aesd_device.buffer.entry[index].buffptr);
+        }
+    }
+        if (aesd_device.data_buffer.buffptr != NULL) {
+        kfree(aesd_device.data_buffer.buffptr);
+    }
     cdev_del(&(aesd_device.cdev));
     unregister_chrdev_region(devno, 1);
 }
