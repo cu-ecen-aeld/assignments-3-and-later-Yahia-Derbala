@@ -173,8 +173,9 @@ loff_t aesd_llseek(struct file *filp, loff_t f_offs, int whence)
             PDEBUG("Used SEEK_END to set the offset to %lld\n", retval);
             break;
         default:
-        retval= -EINVAL;
-        goto inCaseOfFailure;
+            retval= -EINVAL;
+            goto inCaseOfFailure;
+    }
     if (retval < 0) {
         PDEBUG("Invalid arguments, offset can't be set to %lld\n", retval);
         retval = -EINVAL;
@@ -190,15 +191,15 @@ inCaseOfFailure:
 
 static long aesd_adjust_file_offset(struct file *filp , unsigned int write_cmd,unsigned int write_cmd_offset)
 {
-  struct aesd_dev *dev = filp->private_data;
-  struct aesd_circular_buffer *buffer = &(dev->buffer);
-  uint8_t index;
-  long retval = 0;
+    struct aesd_dev *dev = filp->private_data;
+    struct aesd_circular_buffer *buffer = &(dev->buffer);
+    uint8_t index;
+    long retval = 0;
 
-  if(mutex_lock_interruptible(&(dev->lock)))
-  {
-    return -ERESTARTSYS;
-  }  
+    if(mutex_lock_interruptible(&(dev->lock)))
+    {
+        return -ERESTARTSYS;
+    }  
 
     if((write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) || 
     (buffer->entry[write_cmd].buffptr==NULL)||
