@@ -216,7 +216,7 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
                     break;
                 }
 
-                for (ndex = 0; index < seekto.write_cmd; index++) {
+                for (index = 0; index < seekto.write_cmd; index++) {
                     if (dev->buffer.entry[index].buffptr) {
                         target_offset += dev->buffer.entry[index].size;
                     }
