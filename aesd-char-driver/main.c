@@ -48,6 +48,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                   loff_t *f_pos) {
     ssize_t retval = 0;
     struct aesd_buffer_entry *ret_entry = 0;
+    ssize_t offset;
     struct aesd_dev *dev = (struct aesd_dev *)filp->private_data;
     PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
     /**
@@ -60,15 +61,15 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     }
 
     ret_entry = aesd_circular_buffer_find_entry_offset_for_fpos(
-        &(dev->buffer), *f_pos, &retval);
+        &(dev->buffer), *f_pos, &offset);
     if (ret_entry == NULL) {
         PDEBUG("Not enough data written!\n");
         retval = 0;
         goto inCaseOfFailure;
     }
     PDEBUG("Readed data\n");
-    retval = ret_entry->size;
-    if (copy_to_user(buf, ret_entry->buffptr, retval)) {
+    retval = ret_entry->size-offset;
+    if (copy_to_user(buf, (void *)(ret_entry->buffptr + offset), retval)) {
         PDEBUG("Error copying data to user buffer\n");
         retval = -EFAULT;
         goto inCaseOfFailure;
@@ -132,7 +133,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         dev->data_buffer.size = 0;
         dev->data_buffer.buffptr = NULL;
     }
-
+    *f_pos+=count;
 inCaseOfFailure:
     mutex_unlock(&(dev->lock));
     return retval;
@@ -240,16 +241,13 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 
     return retval;
 }
-
-struct file_operations aesd_fops = {
-    .owner = THIS_MODULE,
-    .read = aesd_read,
-    .write = aesd_write,
-    .open = aesd_open,
-    .release = aesd_release,
-    .llseek = aesd_llseek,
-    .unlocked_ioctl = aesd_ioctl
-};
+struct file_operations aesd_fops = {.owner = THIS_MODULE,
+                                    .read = aesd_read,
+                                    .write = aesd_write,
+                                    .open = aesd_open,
+                                    .release = aesd_release,
+                                    .llseek = aesd_llseek,
+                                    .unlocked_ioctl = aesd_ioctl};
 
 static int aesd_setup_cdev(struct aesd_dev *dev) {
     int err, devno = MKDEV(aesd_major, aesd_minor);
@@ -297,17 +295,7 @@ deviceNumberFail:
 void aesd_cleanup_module(void) {
     uint8_t index;
     dev_t devno = MKDEV(aesd_major, aesd_minor);
-
-    // for (index = 0; index < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; index++)
-    // {
-    //     if (aesd_device.buffer.entry[index].buffptr) {
-    //         kfree(aesd_device.buffer.entry[index].buffptr);
-    //     }
-    // }
-
-    // if (aesd_device.data_buffer.buffptr)
-    //     kfree(aesd_device.data_buffer.buffptr);
-  for (index = 0; index < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; index++) {
+    for (index = 0; index < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; index++) {
         if (aesd_device.buffer.entry[index].buffptr != NULL) {
             kfree(aesd_device.buffer.entry[index].buffptr);
         }

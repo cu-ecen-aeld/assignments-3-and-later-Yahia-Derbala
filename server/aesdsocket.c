@@ -128,7 +128,8 @@ void *connection_handler(void *socket_desc) {
         pthread_mutex_lock(&data_mutex);  // Lock mutex before critical section
 
         buffer[bytes_received] = '\0';
-// Check for the specific command AESDCHAR_IOCSEEKTO:X,Y
+    // Check for the specific command AESDCHAR_IOCSEEKTO:X,Y
+        // Inside connection_handler function
         if (strncmp(buffer, "AESDCHAR_IOCSEEKTO:", 19) == 0) {
             unsigned int x, y;
             if (sscanf(buffer + 19, "%u,%u", &x, &y) == 2) {
@@ -140,6 +141,7 @@ void *connection_handler(void *socket_desc) {
                     pthread_exit(NULL); // Exit thread on ioctl error
                 }
             }
+        }
         } else {
             fprintf(fp, "%s", buffer);  // Write received data to file
             char *newline = strchr(buffer, '\n');
