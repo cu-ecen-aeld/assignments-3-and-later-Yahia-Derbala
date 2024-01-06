@@ -141,7 +141,6 @@ void *connection_handler(void *socket_desc) {
                     pthread_exit(NULL); // Exit thread on ioctl error
                 }
             }
-        }
         } else {
             fprintf(fp, "%s", buffer);  // Write received data to file
             char *newline = strchr(buffer, '\n');
