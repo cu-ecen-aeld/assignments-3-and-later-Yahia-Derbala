@@ -136,7 +136,7 @@ void *connection_handler(void *socket_desc) {
             unsigned int x, y;
             if (sscanf(buffer + 19, "%u,%u", &x, &y) == 2) {
                 // Perform ioctl AESDCHAR_IOCSEEKTO command
-                if (ioctl(aesd_char_fd, AESDCHAR_IOCSEEKTO, ((x << 16) | y)) == -1) {
+                if (unlocked_ioctl(aesd_char_fd, AESDCHAR_IOCSEEKTO, ((x << 16) | y)) == -1) {
                     perror("ioctl AESDCHAR_IOCSEEKTO");
                     close(aesd_char_fd);
                     fclose(fp);
