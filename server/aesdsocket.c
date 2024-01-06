@@ -11,9 +11,10 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
 #define PORT 9000
 
-#define USE_AESD_CHAR_DEVICE
+#define USE_AESD_CHAR_DEVICE 
 
 #ifdef USE_AESD_CHAR_DEVICE
 #define DATA_FILE "/dev/aesdchar"
@@ -116,7 +117,6 @@ void *connection_handler(void *socket_desc) {
         pthread_exit(NULL);  // Exit thread on file open error
     }
 
-
     int aesd_char_fd = open(DATA_FILE, O_RDWR); // Open the aesdchar device
     if (aesd_char_fd == -1) {
         perror("open aesdchar device");
@@ -124,12 +124,14 @@ void *connection_handler(void *socket_desc) {
         pthread_exit(NULL); // Exit thread on device open error
     }
 
+    loff_t target_offset = 0;
+
     while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
         pthread_mutex_lock(&data_mutex);  // Lock mutex before critical section
 
         buffer[bytes_received] = '\0';
-    // Check for the specific command AESDCHAR_IOCSEEKTO:X,Y
-        // Inside connection_handler function
+
+        // Check for the specific command AESDCHAR_IOCSEEKTO:X,Y
         if (strncmp(buffer, "AESDCHAR_IOCSEEKTO:", 19) == 0) {
             unsigned int x, y;
             if (sscanf(buffer + 19, "%u,%u", &x, &y) == 2) {
@@ -140,14 +142,33 @@ void *connection_handler(void *socket_desc) {
                     fclose(fp);
                     pthread_exit(NULL); // Exit thread on ioctl error
                 }
+                target_offset = ((loff_t)x << 16) | y;
             }
         } else {
             fprintf(fp, "%s", buffer);  // Write received data to file
             char *newline = strchr(buffer, '\n');
             if (newline != NULL) {
                 fflush(fp);  // Flush data to file
-                send_data_to_client(client_socket);  // Send data back to client
+                // Send data back to client
+                send_data_to_client(client_socket);
                 memset(buffer, 0, sizeof(buffer));  // Clear buffer for next data
+            }
+        }
+
+        // Set the file offset for read operation
+        if (lseek(aesd_char_fd, target_offset, SEEK_SET) == -1) {
+            perror("lseek");
+            close(aesd_char_fd);
+            fclose(fp);
+            pthread_exit(NULL);
+        }
+
+        // Read content of aesdchar device and send over socket
+        char read_buffer[1024];
+        ssize_t bytes_read = read(aesd_char_fd, read_buffer, sizeof(read_buffer));
+        if (bytes_read > 0) {
+            if (send(client_socket, read_buffer, bytes_read, 0) != bytes_read) {
+                perror("send");
             }
         }
 
@@ -159,6 +180,7 @@ void *connection_handler(void *socket_desc) {
     close(aesd_char_fd);    // Close aesdchar device
     pthread_exit(NULL);     // Exit thread
 }
+
 
 int main(int argc, char *argv[]) {
     struct sigaction sa;
