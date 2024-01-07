@@ -30,49 +30,6 @@ int server_fd;
 pthread_mutex_t data_mutex = PTHREAD_MUTEX_INITIALIZER;
 ThreadNode *thread_list = NULL;                    // Linked list to manage threads
 
-// Signal handler to gracefully exit the program
-void signal_handler(int sig) {
-    if (sig == SIGINT || sig == SIGTERM) {
-        syslog(LOG_INFO, "Caught signal, exiting");
-
-        pthread_mutex_lock(&data_mutex);  // Lock mutex before cleanup
-
-        // Request exit from each thread and wait for threads to complete execution
-        ThreadNode *current = thread_list;
-        while (current != NULL) {
-            pthread_cancel(current->tid);  // Request thread exit
-            pthread_join(current->tid, NULL);  // Wait for thread to complete
-            ThreadNode *temp = current;
-            current = current->next;
-            free(temp);  // Free thread node memory
-        }
-        thread_list = NULL;
-
-        pthread_mutex_unlock(&data_mutex);  // Unlock mutex after cleanup
-
-        close(server_fd);  // Close server socket
-        #ifndef USE_AESD_CHAR_DEVICE
-        remove(DATA_FILE); // Remove data file
-        #endif
-        exit(EXIT_SUCCESS); // Exit the program
-    }
-}
-
-// Function to handle sending data back to the client
-void send_data_to_client(int client_socket) {
-    FILE *fp = fopen(DATA_FILE, "r");
-    if (fp == NULL) {
-        perror("fopen");
-        exit(EXIT_FAILURE);
-    }
-
-    char buffer[1024];
-    while (fgets(buffer, sizeof(buffer), fp) != NULL) {
-        send(client_socket, buffer, strlen(buffer), 0);
-    }
-
-    fclose(fp);
-}
     #ifndef USE_AESD_CHAR_DEVICE
 void *append_timestamp(void *arg) {
     // Function to append timestamp every 10 seconds
@@ -103,63 +60,125 @@ void *append_timestamp(void *arg) {
     }
 }
     #endif
-// Function executed by each thread to handle client connection
+// Signal handler to gracefully exit the program
+void signal_handler(int sig) {
+    if (sig == SIGINT || sig == SIGTERM) {
+        syslog(LOG_INFO, "Caught signal, exiting");
+
+        pthread_mutex_lock(&data_mutex);  // Lock mutex before cleanup
+
+        // Request exit from each thread and wait for threads to complete execution
+        ThreadNode *current = thread_list;
+        while (current != NULL) {
+            pthread_cancel(current->tid);  // Request thread exit
+            pthread_join(current->tid, NULL);  // Wait for thread to complete
+            ThreadNode *temp = current;
+            current = current->next;
+            free(temp);  // Free thread node memory
+        }
+        thread_list = NULL;
+
+        pthread_mutex_unlock(&data_mutex);  // Unlock mutex after cleanup
+
+        close(server_fd);  // Close server socket
+        #ifndef USE_AESD_CHAR_DEVICE
+        remove(DATA_FILE); // Remove data file
+        #endif
+        exit(EXIT_SUCCESS); // Exit the program
+    }
+}
+
+// Function to handle sending data back to the client
+void handle_write_command(const char *command) {
+    unsigned int x, y;
+    if (sscanf(command, "AESDCHAR_IOCSEEKTO:%u,%u", &x, &y) == 2) {
+        FILE *fp = fopen(DATA_FILE, "r+");
+        if (fp == NULL) {
+            perror("fopen");
+            exit(EXIT_FAILURE);
+        }
+
+        int fd = fileno(fp); // Get file descriptor from FILE pointer
+
+        // Perform IOCTL command AESDCHAR_IOCSEEKTO
+        struct aesd_seekto seek_data;
+        seek_data.write_cmd = x;
+        seek_data.write_cmd_offset = y;
+
+        if (ioctl(fd, AESDCHAR_IOCSEEKTO, &seek_data) == -1) {
+            perror("ioctl AESDCHAR_IOCSEEKTO");
+            fclose(fp);
+            exit(EXIT_FAILURE);
+        }
+
+        fclose(fp);
+    }
+}
+
+// Function to read from aesdchar device and send data back over socket
+void send_aesdchar_content(int client_socket) {
+    FILE *fp = fopen(DATA_FILE, "r");
+    if (fp == NULL) {
+        perror("fopen");
+        exit(EXIT_FAILURE);
+    }
+
+    char buffer[1024];
+    size_t bytes_read;
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
+        send(client_socket, buffer, bytes_read, 0);
+    }
+
+    fclose(fp);
+}
+
+// Modified connection handler to handle write commands and ioctl
 void *connection_handler(void *socket_desc) {
-    int client_socket = *(int *)socket_desc;  // Get client socket from argument
-    free(socket_desc);  // Free the allocated memory for socket descriptor
+    int client_socket = *(int *)socket_desc;
+    free(socket_desc);
 
     char buffer[1024];
     ssize_t bytes_received;
     FILE *fp = fopen(DATA_FILE, "a+");
-    struct aesd_seekto seekto;
-
     if (fp == NULL) {
         perror("fopen");
-        pthread_exit(NULL);  // Exit thread on file open error
+        pthread_exit(NULL);
     }
 
-    int aesd_char_fd = fileno(fp); // Get the file descriptor associated with FILE *
-
     while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
-        pthread_mutex_lock(&data_mutex);  // Lock mutex before critical section
+        pthread_mutex_lock(&data_mutex);
 
         buffer[bytes_received] = '\0';
 
-        // Check for the specific command AESDCHAR_IOCSEEKTO:X,Y
-        if (strncmp(buffer, "AESDCHAR_IOCSEEKTO:", 19) == 0) {
-            unsigned int x, y;
-            if (sscanf(buffer + 19, "%u,%u", &x, &y) == 2) {
-                // Prepare ioctl command parameters
-                seekto.write_cmd = x;
-                seekto.write_cmd_offset = y;
-
-                // Perform ioctl AESDCHAR_IOCSEEKTO command using file descriptor
-                if (ioctl(aesd_char_fd, AESDCHAR_IOCSEEKTO, &seekto) == -1) {
-                    perror("ioctl AESDCHAR_IOCSEEKTO");
-                    fclose(fp);
-                    pthread_exit(NULL); // Exit thread on ioctl error
-                }
-                continue; // Do not proceed to file write, as this was a seek command
-            }
-        }
-
-        // Write received data to file
-        fprintf(fp, "%s", buffer);
         char *newline = strchr(buffer, '\n');
         if (newline != NULL) {
-            fflush(fp);  // Flush data to file
-            send_data_to_client(client_socket);  // Send data back to client
-            memset(buffer, 0, sizeof(buffer));  // Clear buffer for next data
+
+            // Check if the received buffer matches the command pattern
+            if (strncmp(buffer, "AESDCHAR_IOCSEEKTO:", strlen("AESDCHAR_IOCSEEKTO:")) == 0) {
+                // Handle the specific command without writing to aesdchar
+                handle_write_command(buffer);
+
+                // Note: Omit writing this command to the aesdchar device
+            } else {
+                fprintf(fp, "%s", buffer);
+                fflush(fp);
+                // For other strings, write to aesdchar device as usual
+                // Assuming the code to write to aesdchar is here
+                // write_to_aesdchar(buffer);
+            }
+
+            // Send content of aesdchar device back over the socket
+            send_aesdchar_content(client_socket);
+            memset(buffer, 0, sizeof(buffer));
         }
 
-        pthread_mutex_unlock(&data_mutex);  // Unlock mutex after critical section
+        pthread_mutex_unlock(&data_mutex);
     }
 
-    close(client_socket);  // Close client socket
-    fclose(fp);             // Close file
-    pthread_exit(NULL);     // Exit thread
+    close(client_socket);
+    fclose(fp);
+    pthread_exit(NULL);
 }
-
 
 int main(int argc, char *argv[]) {
     struct sigaction sa;

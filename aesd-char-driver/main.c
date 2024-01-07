@@ -18,7 +18,8 @@
 
 int aesd_major = 0; // use dynamic major
 int aesd_minor = 0;
-
+loff_t offset_backup = 0;
+uint8_t ioctl_called = 0;
 MODULE_AUTHOR("Piistachyoo");
 MODULE_LICENSE("Dual BSD/GPL");
 
@@ -33,6 +34,10 @@ int aesd_open(struct inode *inode, struct file *filp) {
      */
     ptr_aesd_dev = container_of(inode->i_cdev, struct aesd_dev, cdev);
     filp->private_data = ptr_aesd_dev;
+        if (ioctl_called) {
+        ioctl_called = 0;
+        filp->f_pos = offset_backup;
+    }
     return 0;
 }
 
@@ -47,10 +52,11 @@ int aesd_release(struct inode *inode, struct file *filp) {
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                   loff_t *f_pos) {
     ssize_t retval = 0;
-    struct aesd_buffer_entry *ret_entry = 0;
     ssize_t offset;
+    struct aesd_buffer_entry *ret_entry = 0;
     struct aesd_dev *dev = (struct aesd_dev *)filp->private_data;
-    PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
+    PDEBUG("read %zu bytes with offset %lld\n", count, *f_pos);
+    PDEBUG("filp->f_offs = %lld\n", filp->f_pos);
     /**
      * TODO: handle read
      */
@@ -62,13 +68,13 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 
     ret_entry = aesd_circular_buffer_find_entry_offset_for_fpos(
         &(dev->buffer), *f_pos, &offset);
+    PDEBUG("offset return = %ld\n", offset);
     if (ret_entry == NULL) {
         PDEBUG("Not enough data written!\n");
         retval = 0;
         goto inCaseOfFailure;
     }
-    PDEBUG("Readed data\n");
-    retval = ret_entry->size-offset;
+    retval = ret_entry->size - offset;
     if (copy_to_user(buf, (void *)(ret_entry->buffptr + offset), retval)) {
         PDEBUG("Error copying data to user buffer\n");
         retval = -EFAULT;
@@ -77,9 +83,10 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         *f_pos += retval;
     }
 
-    PDEBUG("Data copied: %s \n", ret_entry->buffptr);
+    PDEBUG("Data copied: %s", ret_entry->buffptr + offset);
     PDEBUG("new offset: %lld\n", *f_pos);
     PDEBUG("retval: %ld\n", retval);
+    PDEBUG("-------------------------------\n");
 
 inCaseOfFailure:
     mutex_unlock(&(dev->lock));
@@ -192,53 +199,69 @@ out:
     return retval;
 }
 
-long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
-    long retval = 0;
+static long aesd_adjust_file_offset(struct file *filp, unsigned int write_cmd,
+                                    unsigned int write_cmd_offset) {
     struct aesd_dev *dev = filp->private_data;
+    struct aesd_circular_buffer *buffer = &(dev->buffer);
+    uint8_t index;
+    long retval;
+    long new_offset = 0;
 
-    if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC) {
-        return -ENOTTY;
+    if (mutex_lock_interruptible(&(dev->lock))) {
+        return -ERESTARTSYS;
     }
 
+    /* Validate arguments */
+    if ((write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) ||
+        (buffer->entry[write_cmd].buffptr == NULL) ||
+        (buffer->entry[write_cmd].size <= write_cmd_offset)) {
+        retval = -EINVAL;
+        PDEBUG("Error: invalid argument\n");
+        goto inCaseOfFailure;
+    }
+
+    /* Set the offset to the demanded offset */
+
+    /* Seek to the start of write_cmd entry */
+    for (index = 0; index < write_cmd; index++) {
+        new_offset += buffer->entry[index].size;
+    }
+
+    /* Add offset */
+    new_offset += write_cmd_offset;
+    filp->f_pos = new_offset;
+    offset_backup = filp->f_pos;
+    ioctl_called = 1;
+    retval = 0;
+    mutex_unlock(&(dev->lock));
+
+    PDEBUG("Your new f_pos is: %lld", filp->f_pos);
+inCaseOfFailure:
+    return retval;
+}
+
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
+    long retval;
+    PDEBUG("********************************************\n");
+    PDEBUG("ioctl is called with command %u\n", cmd);
     switch (cmd) {
-        case AESDCHAR_IOCSEEKTO:
-            {
-                loff_t target_offset = 0;
-                struct aesd_seekto seekto;
-                uint8_t index;
-                if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto))) {
-                    retval = -EFAULT;
-                    break;
-                }
-
-                if (seekto.write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED ||
-                    seekto.write_cmd_offset >= dev->buffer.entry[seekto.write_cmd].size) {
-                    retval = -EINVAL;
-                    break;
-                }
-
-                for (index = 0; index < seekto.write_cmd; index++) {
-                    if (dev->buffer.entry[index].buffptr) {
-                        target_offset += dev->buffer.entry[index].size;
-                    }
-                }
-                target_offset += seekto.write_cmd_offset;
-
-                if (target_offset < 0 || target_offset > dev->buffer.entry[seekto.write_cmd].size) {
-                    retval = -EINVAL;
-                    break;
-                }
-
-                filp->f_pos = target_offset;
-                retval = 0;
-                PDEBUG("AESDCHAR_IOCSEEKTO: Set file position to %lld\n", filp->f_pos);
-            }
-            break;
-        default:
-            retval = -ENOTTY;
-            break;
+    case AESDCHAR_IOCSEEKTO:
+        struct aesd_seekto seekto;
+        if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto))) {
+            PDEBUG("ioctl: Error copying data from user\n");
+            retval = -EFAULT;
+        } else {
+            PDEBUG("ioctl: Adjusting file offset to %u, %u\n", seekto.write_cmd,
+                   seekto.write_cmd_offset);
+            retval = aesd_adjust_file_offset(filp, seekto.write_cmd,
+                                             seekto.write_cmd_offset);
+        }
+        break;
+    default:
+        PDEBUG("ioctl: Wrong command\n");
+        retval = -EINVAL;
     }
-
+    PDEBUG("********************************************\n");
     return retval;
 }
 struct file_operations aesd_fops = {.owner = THIS_MODULE,
